@@ -250,3 +250,38 @@ func TestBrowserCommand(t *testing.T) {
 		}
 	}
 }
+
+// A token endpoint that redirects is not followed. On a 307 or 308 Go's
+// client sends the POST body again -- the refresh token, or the code and its
+// verifier -- wherever the redirect points, and Basic credentials with it to
+// the same host on any scheme or port. Nothing in RFC 6749 has a token
+// endpoint redirect; RFC 9700 §4.12 is this replay on the front channel.
+// The listener on the other end records what reaches it.
+func TestTokenEndpointRedirectIsNotFollowed(t *testing.T) {
+	for _, code := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect, http.StatusFound} {
+		var got []string
+		other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			got = append(got, r.PostForm.Get("refresh_token")+r.Header.Get("Authorization"))
+			_, _ = w.Write([]byte(`{"access_token":"x","token_type":"bearer"}`))
+		}))
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other.URL+"/token", code)
+		}))
+		c := &Client{p: &Provider{TokenURL: srv.URL, client: http.DefaultClient}, cfg: Config{ClientID: "c", Secret: "s"}}
+		_, err := c.Refresh(context.Background(), "the-refresh-token", For{})
+		srv.Close()
+		other.Close()
+		if len(got) != 0 {
+			t.Fatalf("%d: the redirect was followed, and carried %q", code, got)
+		}
+		if err == nil || !strings.Contains(err.Error(), "redirect") {
+			t.Fatalf("%d: %v", code, err)
+		}
+	}
+	// The caller's client is left as it was: it may follow redirects
+	// elsewhere (discovery does).
+	if http.DefaultClient.CheckRedirect != nil {
+		t.Fatal("the caller's client was changed")
+	}
+}
