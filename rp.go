@@ -269,11 +269,22 @@ func (c *Client) token(ctx context.Context, form url.Values) (*Token, error) {
 		// RFC 6749 §2.3.1: both are form-encoded BEFORE they go into Basic.
 		req.SetBasicAuth(url.QueryEscape(c.cfg.ClientID), url.QueryEscape(c.cfg.Secret))
 	}
-	res, err := c.p.client.Do(req)
+	// ⛔ A redirect is not followed. On a 307 or 308 Go's client sends this
+	// body again -- the refresh token, or the code and its verifier --
+	// wherever it points, and the Basic credentials with it to the same host
+	// on any scheme or port. A token endpoint has no reason to redirect
+	// (RFC 6749 §3.2; RFC 9700 §4.12 is this replay on the front channel).
+	// A copy of the caller's client, which may follow redirects elsewhere.
+	hc := *c.p.client
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
+		return nil, fmt.Errorf("rp: token endpoint: %s: a redirect, not followed", res.Status)
+	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return nil, err

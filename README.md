@@ -37,6 +37,7 @@ c, tok, id, err := rp.Loopback(ctx, p, rp.Config{ClientID: "console"}, rp.OpenBr
 | **state and nonce** | 32 random bytes each per login. The ID token must carry the login's nonce, and with several audiences its `azp` must be this client (OIDC Core §3.1.3.7). |
 | **discovery** | the document must name the issuer it was fetched for, exactly (OIDC Discovery §4.3); every endpoint must be https or loopback; an end-session endpoint in the clear is dropped. |
 | **client authentication** | `client_secret_basic`, both parts form-encoded first (RFC 6749 §2.3.1). With no secret the client is **public** and names itself in the body (§3.2.1), as a native app must. |
+| **no redirect at the token endpoint** | (since v0.1.1) a 3xx is an error, not followed. On a 307 or 308 Go's client sends the body again -- the refresh token, or the code and its verifier -- wherever it points, and Basic credentials with it to the same host on any scheme or port. The caller's `http.Client` is not changed. |
 | **refresh** | `resource` and/or `scope` say what the token is for. `IsInvalidGrant` tells a grant that has ended from a refusal that has not (`invalid_target`). |
 
 ## The loopback login (RFC 8252)
