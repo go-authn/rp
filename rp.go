@@ -118,6 +118,12 @@ type Config struct {
 	// Scopes asked for at the login. Default openid. A refresh token usually
 	// needs offline_access, or the provider's equivalent.
 	Scopes []string
+	// MinRefresh is how long the ID-token key set waits before it is fetched
+	// again for an unknown kid (go-authn/oidc Config.MinRefresh; 0 is its
+	// default, one minute). Lower picks up a provider's key rotation sooner;
+	// it is also how often a stream of forged kids can make this client ask
+	// the provider.
+	MinRefresh time.Duration
 }
 
 // Client logs people in at one provider.
@@ -139,7 +145,10 @@ func NewClient(ctx context.Context, p *Provider, cfg Config) (*Client, error) {
 	if !slices.Contains(cfg.Scopes, "openid") {
 		return nil, errors.New("rp: the scopes must include openid")
 	}
-	v, err := oidc.New(ctx, oidc.Config{Issuer: p.Issuer, Audience: cfg.ClientID, Client: p.client})
+	if cfg.MinRefresh < 0 {
+		return nil, errors.New("rp: a negative MinRefresh")
+	}
+	v, err := oidc.New(ctx, oidc.Config{Issuer: p.Issuer, Audience: cfg.ClientID, Client: p.client, MinRefresh: cfg.MinRefresh})
 	if err != nil {
 		return nil, err
 	}
