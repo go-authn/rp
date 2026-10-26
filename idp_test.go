@@ -29,6 +29,7 @@ type testIdP struct {
 	t      *testing.T
 	srv    *httptest.Server
 	key    *ecdsa.PrivateKey
+	kid    string // of key; rotateKey changes both
 	issuer string
 
 	clientID, secret, redirect string
@@ -61,7 +62,7 @@ func newTestIdP(t *testing.T) *testIdP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &testIdP{t: t, key: k, clientID: "portal", secret: "s3cret",
+	p := &testIdP{t: t, key: k, kid: "k1", clientID: "portal", secret: "s3cret",
 		codes: map[string]codeGrant{}, live: map[string]string{}, retired: map[string]string{}, revoked: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", p.discovery)
@@ -90,10 +91,24 @@ func (p *testIdP) discovery(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(d)
 }
 
+// rotateKey replaces the signing key, as a provider rotating its keys does:
+// the old one is no longer published.
+func (p *testIdP) rotateKey(kid string) {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.key, p.kid = k, kid
+	p.mu.Unlock()
+}
+
 func (p *testIdP) jwks(w http.ResponseWriter, r *http.Request) {
-	pub := p.key.PublicKey
+	p.mu.Lock()
+	pub, kid := p.key.PublicKey, p.kid
+	p.mu.Unlock()
 	_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
-		"kty": "EC", "crv": "P-256", "kid": "k1", "alg": "ES256", "use": "sig",
+		"kty": "EC", "crv": "P-256", "kid": kid, "alg": "ES256", "use": "sig",
 		"x": b64(pub.X.FillBytes(make([]byte, 32))), "y": b64(pub.Y.FillBytes(make([]byte, 32))),
 	}}})
 }
@@ -199,7 +214,7 @@ func (p *testIdP) at(aud string) map[string]any {
 }
 
 func (p *testIdP) sign(typ string, claims map[string]any) string {
-	h, _ := json.Marshal(map[string]string{"alg": "ES256", "kid": "k1", "typ": typ})
+	h, _ := json.Marshal(map[string]string{"alg": "ES256", "kid": p.kid, "typ": typ})
 	c, _ := json.Marshal(claims)
 	in := b64(h) + "." + b64(c)
 	sum := sha256.Sum256([]byte(in))

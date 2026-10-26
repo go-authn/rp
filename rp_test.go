@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 const redirect = "https://app.example.org/callback"
@@ -55,6 +56,44 @@ func login(t *testing.T, c *Client, f Flow, extra url.Values) string {
 		t.Fatal("state lost")
 	}
 	return back.Query().Get("code")
+}
+
+// A provider that rotates its signing key right after the client started:
+// with the default MinRefresh (one minute) the next login is refused until
+// the minute has passed; with a short MinRefresh it is accepted once that
+// passed (go-llmflow/gateway#60, observed with dex rotating every 30 s).
+func TestMinRefreshPicksUpARotationSooner(t *testing.T) {
+	for _, tc := range []struct {
+		min  time.Duration
+		want bool
+	}{{0, false}, {50 * time.Millisecond, true}} {
+		idp := newTestIdP(t)
+		idp.redirect = redirect
+		p, err := Discover(context.Background(), nil, idp.issuer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := NewClient(context.Background(), p, Config{ClientID: idp.clientID, Secret: idp.secret, RedirectURI: redirect, MinRefresh: tc.min})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := NewFlow()
+		if _, _, err := c.Exchange(context.Background(), login(t, c, f, nil), f); err != nil {
+			t.Fatalf("before the rotation: %v", err)
+		}
+		idp.rotateKey("k2")
+		time.Sleep(80 * time.Millisecond)
+		f = NewFlow()
+		_, _, err = c.Exchange(context.Background(), login(t, c, f, nil), f)
+		if (err == nil) != tc.want {
+			t.Fatalf("MinRefresh %s, login after a rotation: %v, want accepted=%v", tc.min, err, tc.want)
+		}
+	}
+	idp := newTestIdP(t)
+	p, _ := Discover(context.Background(), nil, idp.issuer)
+	if _, err := NewClient(context.Background(), p, Config{ClientID: "x", MinRefresh: -time.Second}); err == nil {
+		t.Fatal("a negative MinRefresh was accepted")
+	}
 }
 
 func TestCodeFlowAndRefreshForOneResource(t *testing.T) {
