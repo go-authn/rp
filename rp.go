@@ -53,15 +53,19 @@ type Provider struct {
 	AuthURL       string
 	TokenURL      string
 	EndSessionURL string // "" when the provider has none, or one in the clear
-	client        *http.Client
+	// IssParamSupported: the provider says it sends its issuer in every
+	// authorization response (RFC 9207 §3), so a response without one is refused.
+	IssParamSupported bool
+	client            *http.Client
 }
 
 type discovery struct {
-	Issuer  string   `json:"issuer"`
-	Auth    string   `json:"authorization_endpoint"`
-	Token   string   `json:"token_endpoint"`
-	EndSess string   `json:"end_session_endpoint"`
-	Methods []string `json:"code_challenge_methods_supported"`
+	Issuer   string   `json:"issuer"`
+	Auth     string   `json:"authorization_endpoint"`
+	Token    string   `json:"token_endpoint"`
+	EndSess  string   `json:"end_session_endpoint"`
+	Methods  []string `json:"code_challenge_methods_supported"`
+	IssParam bool     `json:"authorization_response_iss_parameter_supported"`
 }
 
 // Discover reads issuer's /.well-known/openid-configuration.
@@ -104,7 +108,7 @@ func Discover(ctx context.Context, hc *http.Client, issuer string) (*Provider, e
 	if d.Methods != nil && !slices.Contains(d.Methods, "S256") {
 		return nil, errors.New("rp: discovery: the provider does not offer PKCE with S256")
 	}
-	return &Provider{Issuer: issuer, AuthURL: d.Auth, TokenURL: d.Token, EndSessionURL: d.EndSess, client: hc}, nil
+	return &Provider{Issuer: issuer, AuthURL: d.Auth, TokenURL: d.Token, EndSessionURL: d.EndSess, IssParamSupported: d.IssParam, client: hc}, nil
 }
 
 // Config is a client of a provider.
@@ -163,6 +167,10 @@ func (c *Client) Provider() *Provider { return c.p }
 // back -- a sealed cookie, or the memory of the native app that started it.
 type Flow struct {
 	State, Nonce, Verifier string
+	// Provider names the provider of a [Set] this login was sent to; [Set]
+	// refuses to finish it anywhere else (RFC 9700 §4.4.2). Empty for a login
+	// that does not go through a Set.
+	Provider string
 }
 
 // NewFlow is a login with a fresh state, nonce and PKCE verifier: 32 bytes

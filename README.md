@@ -41,6 +41,25 @@ c, tok, id, err := rp.Loopback(ctx, p, rp.Config{ClientID: "console"}, rp.OpenBr
 | **no redirect at the token endpoint** | (since v0.1.1) a 3xx is an error, not followed. On a 307 or 308 Go's client sends the body again -- the refresh token, or the code and its verifier -- wherever it points, and Basic credentials with it to the same host on any scheme or port. The caller's `http.Client` is not changed. |
 | **refresh** | `resource` and/or `scope` say what the token is for. `IsInvalidGrant` tells a grant that has ended from a refusal that has not (`invalid_target`). |
 
+## Several providers (v0.3.0)
+
+A service that logs people in at several providers (one per institution) is open
+to mix-up attacks (RFC 9700 §4.4). `rp.NewSet()` holds one `Client` per provider
+by name (`Add`); `NewFlow(name)` records the provider in `Flow.Provider`;
+`AuthCodeURL(flow, extra)` goes to that provider; and `Exchange(ctx, name, code,
+flow, query)` at the callback of provider `name` refuses, before any request
+leaves, a flow started at another provider and a response whose `iss` parameter
+is not that provider's issuer (RFC 9207 §2.4), then verifies the ID token against
+that provider's issuer and the login's nonce. Register one redirect URI per
+provider (RFC 9700 §4.4.2.2) and hand each callback its provider's name. Two
+providers with one issuer, or a name twice, are refused.
+
+`Client.CheckIssuer(query)` is the RFC 9207 check on its own, for a service with
+a single provider: the `iss` parameter, when present, must be the provider's
+issuer and present once; one that is absent is refused when the provider's
+metadata says it sends it (`authorization_response_iss_parameter_supported`,
+`Provider.IssParamSupported`) and accepted otherwise, as the RFC allows.
+
 ## The loopback login (RFC 8252)
 
 - It listens on **127.0.0.1**, or **[::1]** when there is no IPv4 loopback, on a

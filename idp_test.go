@@ -50,6 +50,7 @@ type testIdP struct {
 	failRefreshFor                                     string // a resource whose refresh answers 500
 	extraAud                                           bool   // ID token with two audiences and no azp
 	noIDToken                                          bool
+	issParam                                           bool // discovery promises the iss response parameter
 }
 
 type codeGrant struct {
@@ -83,6 +84,9 @@ func (p *testIdP) discovery(w http.ResponseWriter, r *http.Request) {
 	d := map[string]any{"issuer": iss, "authorization_endpoint": p.issuer + "/authorize",
 		"token_endpoint": p.issuer + "/token", "jwks_uri": p.issuer + "/jwks",
 		"end_session_endpoint": p.issuer + "/logout?x=1"}
+	if p.issParam {
+		d["authorization_response_iss_parameter_supported"] = true
+	}
 	if p.noS256 {
 		d["code_challenge_methods_supported"] = []string{"plain"}
 	} else {
