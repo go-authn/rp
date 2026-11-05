@@ -51,6 +51,11 @@ type testIdP struct {
 	extraAud                                           bool   // ID token with two audiences and no azp
 	noIDToken                                          bool
 	issParam                                           bool // discovery promises the iss response parameter
+	revocation                                         bool // discovery has a revocation_endpoint (RFC 7009)
+	revokeStatus                                       int  // its answer (default 200)
+	revokeGot                                          url.Values
+	revokeBasicUser                                    string
+	revokeBasic                                        bool
 }
 
 type codeGrant struct {
@@ -70,6 +75,7 @@ func newTestIdP(t *testing.T) *testIdP {
 	mux.HandleFunc("GET /jwks", p.jwks)
 	mux.HandleFunc("GET /authorize", p.authorize)
 	mux.HandleFunc("POST /token", p.token)
+	mux.HandleFunc("POST /revoke", p.revoke)
 	p.srv = httptest.NewServer(mux)
 	t.Cleanup(p.srv.Close)
 	p.issuer = p.srv.URL
@@ -86,6 +92,9 @@ func (p *testIdP) discovery(w http.ResponseWriter, r *http.Request) {
 		"end_session_endpoint": p.issuer + "/logout?x=1"}
 	if p.issParam {
 		d["authorization_response_iss_parameter_supported"] = true
+	}
+	if p.revocation {
+		d["revocation_endpoint"] = p.issuer + "/revoke"
 	}
 	if p.noS256 {
 		d["code_challenge_methods_supported"] = []string{"plain"}
@@ -259,4 +268,23 @@ func (p *testIdP) redirectOK(u string) bool {
 	}
 	pu, err := url.Parse(u)
 	return p.public && err == nil && pu.Scheme == "http" && pu.Hostname() == "127.0.0.1" && pu.Path == "/callback"
+}
+
+// revoke is the RFC 7009 endpoint: it records the request and answers as told.
+func (p *testIdP) revoke(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	p.mu.Lock()
+	p.revokeGot = r.PostForm
+	p.revokeBasicUser, _, p.revokeBasic = r.BasicAuth()
+	st := p.revokeStatus
+	p.mu.Unlock()
+	if st == 400 {
+		w.WriteHeader(400)
+		_, _ = w.Write([]byte(`{"error":"unsupported_token_type"}`))
+		return
+	}
+	if st == 0 {
+		st = 200
+	}
+	w.WriteHeader(st)
 }

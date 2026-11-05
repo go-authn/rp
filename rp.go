@@ -53,6 +53,9 @@ type Provider struct {
 	AuthURL       string
 	TokenURL      string
 	EndSessionURL string // "" when the provider has none, or one in the clear
+	// RevocationURL is the RFC 7009 revocation endpoint, "" when the provider has
+	// none, or one in the clear (see [Client.Revoke]).
+	RevocationURL string
 	// IssParamSupported: the provider says it sends its issuer in every
 	// authorization response (RFC 9207 §3), so a response without one is refused.
 	IssParamSupported bool
@@ -64,6 +67,7 @@ type discovery struct {
 	Auth     string   `json:"authorization_endpoint"`
 	Token    string   `json:"token_endpoint"`
 	EndSess  string   `json:"end_session_endpoint"`
+	Revoke   string   `json:"revocation_endpoint"`
 	Methods  []string `json:"code_challenge_methods_supported"`
 	IssParam bool     `json:"authorization_response_iss_parameter_supported"`
 }
@@ -105,10 +109,13 @@ func Discover(ctx context.Context, hc *http.Client, issuer string) (*Provider, e
 	if d.EndSess != "" && httpsOrLoopback(d.EndSess) != nil {
 		d.EndSess = ""
 	}
+	if d.Revoke != "" && httpsOrLoopback(d.Revoke) != nil {
+		d.Revoke = "" // a token must not travel in the clear
+	}
 	if d.Methods != nil && !slices.Contains(d.Methods, "S256") {
 		return nil, errors.New("rp: discovery: the provider does not offer PKCE with S256")
 	}
-	return &Provider{Issuer: issuer, AuthURL: d.Auth, TokenURL: d.Token, EndSessionURL: d.EndSess, IssParamSupported: d.IssParam, client: hc}, nil
+	return &Provider{Issuer: issuer, AuthURL: d.Auth, TokenURL: d.Token, EndSessionURL: d.EndSess, RevocationURL: d.Revoke, IssParamSupported: d.IssParam, client: hc}, nil
 }
 
 // Config is a client of a provider.
@@ -272,37 +279,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string, f For) (*Toke
 }
 
 func (c *Client) token(ctx context.Context, form url.Values) (*Token, error) {
-	if c.cfg.Secret == "" {
-		// A public client identifies itself in the body (RFC 6749 §3.2.1).
-		form.Set("client_id", c.cfg.ClientID)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.p.TokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	if c.cfg.Secret != "" {
-		// RFC 6749 §2.3.1: both are form-encoded BEFORE they go into Basic.
-		req.SetBasicAuth(url.QueryEscape(c.cfg.ClientID), url.QueryEscape(c.cfg.Secret))
-	}
-	// ⛔ A redirect is not followed. On a 307 or 308 Go's client sends this
-	// body again -- the refresh token, or the code and its verifier --
-	// wherever it points, and the Basic credentials with it to the same host
-	// on any scheme or port. A token endpoint has no reason to redirect
-	// (RFC 6749 §3.2; RFC 9700 §4.12 is this replay on the front channel).
-	// A copy of the caller's client, which may follow redirects elsewhere.
-	hc := *c.p.client
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	res, err := hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 300 && res.StatusCode < 400 {
-		return nil, fmt.Errorf("rp: token endpoint: %s: a redirect, not followed", res.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	res, body, err := c.postForm(ctx, c.p.TokenURL, form, "token endpoint")
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +308,96 @@ func (c *Client) token(ctx context.Context, form url.Values) (*Token, error) {
 		t.Expiry = time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second)
 	}
 	return t, nil
+}
+
+// postForm sends a form to one of the provider's endpoints as this client:
+// client_secret_basic for a confidential client, client_id in the body for a
+// public one. The answer is returned with its body (at most 1 MiB); a redirect
+// is an error.
+func (c *Client) postForm(ctx context.Context, endpoint string, form url.Values, what string) (*http.Response, []byte, error) {
+	if c.cfg.Secret == "" {
+		// A public client identifies itself in the body (RFC 6749 §3.2.1).
+		form.Set("client_id", c.cfg.ClientID)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if c.cfg.Secret != "" {
+		// RFC 6749 §2.3.1: both are form-encoded BEFORE they go into Basic.
+		req.SetBasicAuth(url.QueryEscape(c.cfg.ClientID), url.QueryEscape(c.cfg.Secret))
+	}
+	// ⛔ A redirect is not followed. On a 307 or 308 Go's client sends this
+	// body again -- the refresh token, or the code and its verifier --
+	// wherever it points, and the Basic credentials with it to the same host
+	// on any scheme or port. A token endpoint has no reason to redirect
+	// (RFC 6749 §3.2; RFC 9700 §4.12 is this replay on the front channel).
+	// A copy of the caller's client, which may follow redirects elsewhere.
+	hc := *c.p.client
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	res, err := hc.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
+		return nil, nil, fmt.Errorf("rp: %s: %s: a redirect, not followed", what, res.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, nil, err
+	}
+	return res, body, nil
+}
+
+// RefreshTokenHint and AccessTokenHint are the token_type_hint values of RFC 7009 §2.1.
+const (
+	RefreshTokenHint = "refresh_token"
+	AccessTokenHint  = "access_token"
+)
+
+// ErrNoRevocation: the provider publishes no revocation_endpoint (or one in the
+// clear), so a token cannot be revoked at it.
+var ErrNoRevocation = errors.New("rp: the provider has no revocation endpoint")
+
+// Revoke asks the provider to revoke a token (RFC 7009 §2): the refresh token
+// of a login that ends, so that a copy of it is worth nothing. hint is
+// [RefreshTokenHint], [AccessTokenHint] or "". The provider answers 200 whether
+// or not the token was valid (§2.2), so success says the token is not usable,
+// not that it ever was. A 503 (§2.2.1: try later) and the provider's own
+// errors come back as errors; with no endpoint, [ErrNoRevocation]. The client
+// authenticates as it does at the token endpoint, and a redirect is not followed.
+func (c *Client) Revoke(ctx context.Context, token, hint string) error {
+	if c.p.RevocationURL == "" {
+		return ErrNoRevocation
+	}
+	if token == "" {
+		return errors.New("rp: no token to revoke")
+	}
+	form := url.Values{"token": {token}}
+	if hint != "" {
+		form.Set("token_type_hint", hint)
+	}
+	res, body, err := c.postForm(ctx, c.p.RevocationURL, form, "revocation endpoint")
+	if err != nil {
+		return err
+	}
+	if res.StatusCode == http.StatusOK {
+		return nil
+	}
+	return revocationError(res.StatusCode, body)
+}
+
+// revocationError is what a revocation endpoint's refusal says (RFC 7009
+// §2.2.1, with RFC 6749 §5.2's error object).
+func revocationError(status int, body []byte) error {
+	var e Error
+	if json.Unmarshal(body, &e) == nil && e.Code != "" {
+		return &e
+	}
+	return fmt.Errorf("rp: revocation endpoint: HTTP %d", status)
 }
 
 // VerifyID checks an ID token: signature, issuer, audience (this client),
