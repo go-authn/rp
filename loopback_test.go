@@ -99,7 +99,7 @@ func TestLoopbackRefusals(t *testing.T) {
 			q.Set("iss", "https://evil.example")
 			cb.RawQuery = q.Encode()
 		})
-		if _, _, _, err := Loopback(ctx, p, Config{ClientID: idp.clientID}, open, nil); err == nil || !strings.Contains(err.Error(), "another issuer") {
+		if _, _, _, err := Loopback(ctx, p, Config{ClientID: idp.clientID}, open, nil); err == nil || !strings.Contains(err.Error(), "is from issuer") {
 			t.Fatal(err)
 		}
 	})

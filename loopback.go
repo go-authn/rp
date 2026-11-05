@@ -68,9 +68,10 @@ func Loopback(ctx context.Context, p *Provider, cfg Config, open func(string) er
 		}
 		var a answer
 		switch {
-		case q.Get("iss") != "" && q.Get("iss") != p.Issuer:
-			// RFC 9207: an answer naming another issuer is not this one's.
-			a.err = errors.New("rp: the answer came from another issuer")
+		case c.CheckIssuer(q) != nil:
+			// RFC 9207: an answer naming another issuer, several, or none from
+			// a provider that promises one, is not this one's.
+			a.err = c.CheckIssuer(q)
 		case q.Get("error") != "":
 			a.err = &Error{Code: q.Get("error"), Description: q.Get("error_description")}
 		case q.Get("code") == "":

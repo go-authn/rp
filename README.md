@@ -70,8 +70,10 @@ metadata says it sends it (`authorization_response_iss_parameter_supported`,
   loopback redirect; [go-authn/bridge](https://github.com/go-authn/bridge) does.
 - A request on that port whose `state` is not this login's gets a **400 and is
   ignored**: any local process can reach the port, so only the provider's
-  answer ends the wait. An answer naming another issuer (RFC 9207), or carrying
-  an error, ends it with that error.
+  answer ends the wait. An answer naming another issuer (RFC 9207), several, or
+  none when the provider advertises `authorization_response_iss_parameter_supported`
+  (the same `CheckIssuer` rule as the web flow), or carrying an error, ends it
+  with that error.
 - The client is **public**: a secret shipped inside an application is no secret
   (§8.5). Its refresh tokens rotate (RFC 9700 §4.14.2), so refresh with one of
   them at a time.
