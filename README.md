@@ -40,6 +40,7 @@ c, tok, id, err := rp.Loopback(ctx, p, rp.Config{ClientID: "console"}, rp.OpenBr
 | **client authentication** | `client_secret_basic`, both parts form-encoded first (RFC 6749 §2.3.1). With no secret the client is **public** and names itself in the body (§3.2.1), as a native app must. |
 | **no redirect at the token endpoint** | (since v0.1.1) a 3xx is an error, not followed. On a 307 or 308 Go's client sends the body again -- the refresh token, or the code and its verifier -- wherever it points, and Basic credentials with it to the same host on any scheme or port. The caller's `http.Client` is not changed. |
 | **refresh** | `resource` and/or `scope` say what the token is for. `IsInvalidGrant` tells a grant that has ended from a refusal that has not (`invalid_target`). |
+| **revocation** | (since v0.4.0) `c.Revoke(ctx, refreshToken, rp.RefreshTokenHint)` asks the provider's `revocation_endpoint` (RFC 7009) to end a token, so that a copy of a logged-out session's refresh token is worth nothing; the client authenticates as at the token endpoint and a redirect is not followed. A provider with no such endpoint (or one in the clear) gives `rp.ErrNoRevocation`; `Provider.RevocationURL` says which. |
 
 ## Several providers (v0.3.0)
 
