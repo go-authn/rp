@@ -89,6 +89,13 @@ func Discover(ctx context.Context, hc *http.Client, issuer string) (*Provider, e
 		return nil, fmt.Errorf("rp: discovery: %w", err)
 	}
 	defer res.Body.Close()
+	// A redirect may have left https after the issuer passed the check above:
+	// the document names the token endpoint, so whoever answered in the clear
+	// would choose where the code and the client secret go. The LAST request is
+	// checked (go-authn/oidc does the same, stillHTTPS in jwks.go).
+	if err := httpsOrLoopback(res.Request.URL.String()); err != nil { // Client.Do always sets Request
+		return nil, fmt.Errorf("rp: discovery: the document came from %w", err)
+	}
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("rp: discovery: %s", res.Status)
 	}
