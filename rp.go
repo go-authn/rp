@@ -43,6 +43,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-authn/oidc"
 )
@@ -60,6 +61,15 @@ type Provider struct {
 	// authorization response (RFC 9207 §3), so a response without one is refused.
 	IssParamSupported bool
 	client            *http.Client
+}
+
+// httpClient is the client Discover was given; a Provider built by hand has
+// none, and uses [http.DefaultClient] as Discover does for nil.
+func (p *Provider) httpClient() *http.Client {
+	if p.client == nil {
+		return http.DefaultClient
+	}
+	return p.client
 }
 
 type discovery struct {
@@ -166,7 +176,7 @@ func NewClient(ctx context.Context, p *Provider, cfg Config) (*Client, error) {
 	if cfg.MinRefresh < 0 {
 		return nil, errors.New("rp: a negative MinRefresh")
 	}
-	v, err := oidc.New(ctx, oidc.Config{Issuer: p.Issuer, Audience: cfg.ClientID, Client: p.client, MinRefresh: cfg.MinRefresh})
+	v, err := oidc.New(ctx, oidc.Config{Issuer: p.Issuer, Audience: cfg.ClientID, Client: p.httpClient(), MinRefresh: cfg.MinRefresh})
 	if err != nil {
 		return nil, err
 	}
@@ -231,10 +241,34 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	if e.Description != "" {
-		return "rp: " + e.Code + ": " + e.Description
+	if d := printable(e.Description, maxErrorText); d != "" {
+		return "rp: " + printable(e.Code, maxErrorText) + ": " + d
 	}
-	return "rp: " + e.Code
+	return "rp: " + printable(e.Code, maxErrorText)
+}
+
+// maxErrorText bounds what of the provider's error text reaches a message.
+const maxErrorText = 256
+
+// printable is s for a log line or a terminal: control characters (a newline
+// forges a log entry, an escape drives the terminal) are dropped, and the
+// text stops after max runes. RFC 6749 §5.2 allows printable ASCII only in
+// error and error_description; the exported fields keep what was received.
+func printable(s string, max int) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if unicode.IsControl(r) || r == ' ' || r == ' ' {
+			continue
+		}
+		if n == max {
+			b.WriteString("...")
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
 }
 
 // IsInvalidGrant says whether err is the provider ending the grant.
@@ -342,7 +376,7 @@ func (c *Client) postForm(ctx context.Context, endpoint string, form url.Values,
 	// on any scheme or port. A token endpoint has no reason to redirect
 	// (RFC 6749 §3.2; RFC 9700 §4.12 is this replay on the front channel).
 	// A copy of the caller's client, which may follow redirects elsewhere.
-	hc := *c.p.client
+	hc := *c.p.httpClient()
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	res, err := hc.Do(req)
 	if err != nil {
@@ -424,11 +458,12 @@ func (c *Client) VerifyID(ctx context.Context, raw, nonce string) (*oidc.Token, 
 	if err := tok.Claim("nonce", &got); err != nil || got == "" || got != nonce {
 		return nil, errors.New("rp: the ID token does not carry this login's nonce")
 	}
-	if aud := tok.Audience(); len(aud) > 1 {
-		var azp string
-		if tok.Claim("azp", &azp) != nil || azp != c.cfg.ClientID {
-			return nil, errors.New("rp: the ID token has several audiences and is not authorised to this client")
-		}
+	// OIDC Core §3.1.3.7 items 4 and 5: with several audiences azp must be
+	// present, and whenever it is present it must be this client.
+	var azp string
+	hasAZP := tok.Claim("azp", &azp) == nil
+	if len(tok.Audience()) > 1 && !hasAZP || hasAZP && azp != c.cfg.ClientID {
+		return nil, errors.New("rp: the ID token is not authorised to this client (azp)")
 	}
 	return tok, nil
 }

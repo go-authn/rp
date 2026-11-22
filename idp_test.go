@@ -50,9 +50,10 @@ type testIdP struct {
 	failRefreshFor                                     string // a resource whose refresh answers 500
 	extraAud                                           bool   // ID token with two audiences and no azp
 	noIDToken                                          bool
-	issParam                                           bool // discovery promises the iss response parameter
-	revocation                                         bool // discovery has a revocation_endpoint (RFC 7009)
-	revokeStatus                                       int  // its answer (default 200)
+	azp                                                string // the ID token's azp, when not empty
+	issParam                                           bool   // discovery promises the iss response parameter
+	revocation                                         bool   // discovery has a revocation_endpoint (RFC 7009)
+	revokeStatus                                       int    // its answer (default 200)
 	revokeGot                                          url.Values
 	revokeBasicUser                                    string
 	revokeBasic                                        bool
@@ -172,6 +173,9 @@ func (p *testIdP) token(w http.ResponseWriter, r *http.Request) {
 			"preferred_username": "alice", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix()}
 		if p.extraAud {
 			idc["aud"] = []string{p.clientID, "someone-else"}
+		}
+		if p.azp != "" {
+			idc["azp"] = p.azp
 		}
 		resp := map[string]any{"access_token": p.sign("at+jwt", p.at(p.clientID)), "token_type": "Bearer",
 			"expires_in": 300, "id_token": p.sign("JWT", idc)}

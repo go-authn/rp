@@ -17,7 +17,7 @@ import (
 func browser(t *testing.T, before func(callback *url.URL)) func(string) error {
 	return func(auth string) error {
 		go func() {
-			back := follow(t, auth)
+			back := follow(t, follow(t, auth).String())
 			if before != nil {
 				before(back)
 			}

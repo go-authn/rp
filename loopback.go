@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-authn/oidc"
@@ -23,7 +24,9 @@ import (
 //   - it listens on the loopback IP literal, 127.0.0.1, or [::1] when there
 //     is no IPv4 loopback, on a port the system picks (§7.3); never on
 //     "localhost" (§8.3), and on no other interface;
-//   - it opens the authorization URL in the system browser with open -- never
+//   - it opens a single-use link on its own listener, which redirects to the
+//     authorization URL, in the system browser with open (so the state, nonce
+//     and challenge never appear in a process's arguments) -- never
 //     a web view inside the application (§8.12) -- and PKCE protects the code
 //     on its way back (§6);
 //   - it waits for the redirect at http://127.0.0.1:<port>/callback until ctx
@@ -52,6 +55,14 @@ func Loopback(ctx context.Context, p *Provider, cfg Config, open func(string) er
 		return nil, nil, nil, err
 	}
 	f := NewFlow()
+	// open gets a single-use launcher URL on the listener, not the
+	// authorization URL: the argument of the browser's command line is
+	// readable by every local user, and the state, nonce and PKCE challenge
+	// in it would let one of them have the provider mint a code for this
+	// login's challenge and deliver it. The launcher redirects once.
+	launchPath := "/login/" + random()
+	authURL := c.AuthCodeURL(f, extra)
+	var launched atomic.Bool
 
 	type answer struct {
 		code string
@@ -59,6 +70,15 @@ func Loopback(ctx context.Context, p *Provider, cfg Config, open func(string) er
 	}
 	answers := make(chan answer, 1)
 	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && subtle.ConstantTimeCompare([]byte(r.URL.Path), []byte(launchPath)) == 1 {
+			if !launched.CompareAndSwap(false, true) {
+				http.Error(w, "this link was used already", http.StatusGone)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			http.Redirect(w, r, authURL, http.StatusFound)
+			return
+		}
 		q := r.URL.Query()
 		if r.URL.Path != "/callback" || r.Method != http.MethodGet ||
 			subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(f.State)) != 1 {
@@ -93,7 +113,7 @@ func Loopback(ctx context.Context, p *Provider, cfg Config, open func(string) er
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
-	if err := open(c.AuthCodeURL(f, extra)); err != nil {
+	if err := open("http://" + ln.Addr().String() + launchPath); err != nil {
 		return nil, nil, nil, fmt.Errorf("rp: opening the browser: %w", err)
 	}
 	select {
