@@ -37,7 +37,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -45,6 +44,7 @@ import (
 	"time"
 	"unicode"
 
+	hardenredirect "github.com/go-authn/harden/redirect"
 	"github.com/go-authn/oidc"
 )
 
@@ -498,25 +498,11 @@ func random() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-func isLoopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-// httpsOrLoopback refuses a URL a token or a key would cross in the clear.
+// httpsOrLoopback refuses a URL a token or a key would cross in the clear: the
+// rule is go-authn/harden's redirect package.
 func httpsOrLoopback(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return err
+	if err := hardenredirect.HTTPSOrLoopback(raw); err != nil {
+		return fmt.Errorf("not an https URL: %w", err)
 	}
-	switch {
-	case u.Scheme == "https" && u.Host != "":
-		return nil
-	case u.Scheme == "http" && isLoopback(u.Hostname()):
-		return nil
-	}
-	return fmt.Errorf("%q is not an https URL", raw)
+	return nil
 }

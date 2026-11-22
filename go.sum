@@ -1,2 +1,4 @@
+github.com/go-authn/harden v0.1.0 h1:8ocSIjHGzMhSaWh2g2QCZroo9eC7i+1gyWmBgaDvCpw=
+github.com/go-authn/harden v0.1.0/go.mod h1:whEYokEtB2OBsHeKVjZv9Za73BqiQSvpFhgO4QIn7XQ=
 github.com/go-authn/oidc v0.4.3 h1:H2L1YtpwGQCMoc65vhH5wLPM+09Wygh/32hjtYI052k=
 github.com/go-authn/oidc v0.4.3/go.mod h1:H/Hodeu9kh/Xz3y51XfYu6MZdMJaNfXClyVH0GTUebE=
