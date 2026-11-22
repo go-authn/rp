@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.1
+
+- The https-or-loopback rule comes from `github.com/go-authn/harden/redirect`,
+  shared with oidc, awscred, saml and wireguard. Loopback now also means
+  `*.localhost`, in any letter case and with a trailing dot; an IPv6 zone is
+  refused; the error names the scheme and host, no longer the whole URL (it may
+  carry a secret). The refusal of every redirect on the token endpoint is
+  unchanged.
+
 ## v0.5.0
 
 Security audit 2026-11-21 (go-authn/rp#20).
