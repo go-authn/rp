@@ -17,7 +17,7 @@ import (
 func browser(t *testing.T, before func(callback *url.URL)) func(string) error {
 	return func(auth string) error {
 		go func() {
-			back := follow(t, auth)
+			back := follow(t, follow(t, auth).String())
 			if before != nil {
 				before(back)
 			}
@@ -136,7 +136,10 @@ func TestLoopbackRefusals(t *testing.T) {
 	})
 	t.Run("no browser", func(t *testing.T) {
 		idp, p := publicIdP(t)
-		_, _, _, err := Loopback(ctx, p, Config{ClientID: idp.clientID}, func(string) error { return errors.New("none") }, nil)
+		// A deadline: a Loopback that went on waiting would fail here, not hang.
+		short, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, _, _, err := Loopback(short, p, Config{ClientID: idp.clientID}, func(string) error { return errors.New("none") }, nil)
 		if err == nil || !strings.Contains(err.Error(), "opening the browser") {
 			t.Fatal(err)
 		}
