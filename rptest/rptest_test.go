@@ -4,6 +4,7 @@ package rptest_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -124,6 +125,52 @@ func TestFaults(t *testing.T) {
 				t.Fatal("rp accepted it")
 			}
 		})
+	}
+}
+
+// TestStrict: the provider refuses what a real one refuses.
+func TestStrict(t *testing.T) {
+	p := newIdP(t)
+	prov, err := rp.Discover(t.Context(), p.Client(), p.Issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(secret, redir string) *rp.Client {
+		c, err := rp.NewClient(t.Context(), prov, rp.Config{ClientID: p.ClientID, Secret: secret, RedirectURI: redir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	hc := &http.Client{Transport: p.Client().Transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	// another redirect URI: the authorization request is refused
+	res, err := hc.Get(mk(p.Secret, "https://evil.example/cb").AuthCodeURL(rp.NewFlow(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("another redirect URI: %s", res.Status)
+	}
+
+	// another secret: invalid_client
+	c := mk("other", redirect)
+	f := rp.NewFlow()
+	q := authorize(t, p, c, f)
+	_, _, err = c.Exchange(t.Context(), q.Get("code"), f)
+	var e *rp.Error
+	if !errors.As(err, &e) || e.Code != "invalid_client" {
+		t.Fatalf("another secret: %v", err)
+	}
+
+	// another PKCE verifier: invalid_grant
+	c = mk(p.Secret, redirect)
+	q = authorize(t, p, c, f)
+	_, _, err = c.Exchange(t.Context(), q.Get("code"), rp.Flow{State: f.State, Nonce: f.Nonce, Verifier: "another-verifier"})
+	if !rp.IsInvalidGrant(err) {
+		t.Fatalf("another verifier: %v", err)
 	}
 }
 
