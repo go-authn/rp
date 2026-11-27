@@ -114,6 +114,24 @@ Each check was removed in turn, and a test failed each time:
 Removing the empty-ID-token check changes nothing, because go-authn/oidc refuses
 an empty token anyway; that check stays for its message.
 
+## Testing your own relying party: `rptest`
+
+`github.com/go-authn/rp/rptest` is a fake OpenID provider for the tests of an
+application built on rp: discovery, the key set, and an authorization-code flow
+with PKCE S256, served over HTTPS on a loopback address.
+
+```go
+p := rptest.New(t)
+p.Redirect = "https://app.example/callback"
+prov, err := rp.Discover(ctx, p.Client(), p.Issuer)
+// ... then break it on purpose:
+p.BadNonce = true // or BadSig, WrongAudience, Expired, WrongIssuer, Alg = "none" | "HS256", ...
+```
+
+Its own test runs rp's client against every fault and checks that each is
+refused and the good case accepted, so the fake cannot drift from rp's
+validator.
+
 ## Licence
 
 BSD 3-Clause.
